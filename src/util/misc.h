@@ -17,5 +17,6 @@ static inline uint64_t mmi_rng_next(MmiRng *rng) {
 
 /* Monotonic wall-clock time in milliseconds. */
 int64_t mmi_now_ms(void);
+void mmi_sleep_ms(int ms);
 
 #endif
