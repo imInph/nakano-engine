@@ -1,0 +1,20 @@
+# Build output
+/mmi_engine
+/mmi_engine-debug
+/mmi_engine-tsan
+*.exe
+*.o
+*.dSYM/
+
+# Personal notes and memory for AI tools (see AGENTS.md)
+AGENTS.local.md
+CLAUDE.local.md
+.agents/
+.claude/
+.codex/
+.cursor/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
