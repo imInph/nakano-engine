@@ -164,8 +164,8 @@ bool mmi_position_set_fen(MmiPosition *pos, const char *fen) {
     if (mmi_position_attackers_to(pos, mmi_king_square(pos, them), mmi_occupied(pos)) & pos->by_color[pos->side])
         return false;
 
-    st->checkers = mmi_position_attackers_to(pos, mmi_king_square(pos, pos->side), mmi_occupied(pos)) &
-                   pos->by_color[them];
+    st->checkers =
+        mmi_position_attackers_to(pos, mmi_king_square(pos, pos->side), mmi_occupied(pos)) & pos->by_color[them];
     st->captured = MMI_NO_PIECE;
     st->key = compute_key(pos);
     return true;
@@ -211,7 +211,8 @@ void mmi_position_print(const MmiPosition *pos, FILE *out) {
     char fen[MMI_FEN_MAX];
     fprintf(out, "\n +---+---+---+---+---+---+---+---+\n");
     for (int rank = 7; rank >= 0; rank--) {
-        for (int file = 0; file < 8; file++) fprintf(out, " | %c", piece_chars[pos->board[mmi_make_square(file, rank)]]);
+        for (int file = 0; file < 8; file++)
+            fprintf(out, " | %c", piece_chars[pos->board[mmi_make_square(file, rank)]]);
         fprintf(out, " | %d\n +---+---+---+---+---+---+---+---+\n", rank + 1);
     }
     mmi_position_get_fen(pos, fen);

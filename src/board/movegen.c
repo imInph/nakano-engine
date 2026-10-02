@@ -87,7 +87,8 @@ static void generate_castling(const MmiPosition *pos, MmiMoveList *list, MmiBitb
     if ((st->castling & oo) && !(occ & (mmi_square_bb(base + 5) | mmi_square_bb(base + 6))) &&
         !(danger & (mmi_square_bb(base + 5) | mmi_square_bb(base + 6))))
         add(list, mmi_move_make(king, base + 7, MMI_MOVE_CASTLING));
-    if ((st->castling & ooo) && !(occ & (mmi_square_bb(base + 1) | mmi_square_bb(base + 2) | mmi_square_bb(base + 3))) &&
+    if ((st->castling & ooo) &&
+        !(occ & (mmi_square_bb(base + 1) | mmi_square_bb(base + 2) | mmi_square_bb(base + 3))) &&
         !(danger & (mmi_square_bb(base + 2) | mmi_square_bb(base + 3))))
         add(list, mmi_move_make(king, base, MMI_MOVE_CASTLING));
 }

@@ -7,6 +7,7 @@
 #   make format-check fail if any source is not formatted
 
 CC ?= cc
+CLANG_FORMAT ?= clang-format
 EXE = mmi_engine
 SRCS := $(wildcard src/*.c src/*/*.c)
 HDRS := $(wildcard src/*.h src/*/*.h)
@@ -52,10 +53,10 @@ test: $(EXE)
 	sh tests/run_tests.sh ./$(EXE)
 
 format:
-	clang-format -i $(SRCS) $(HDRS)
+	$(CLANG_FORMAT) -i $(SRCS) $(HDRS)
 
 format-check:
-	clang-format --dry-run --Werror $(SRCS) $(HDRS)
+	$(CLANG_FORMAT) --dry-run --Werror $(SRCS) $(HDRS)
 
 clean:
 	rm -rf $(EXE) $(EXE)-debug $(EXE)-tsan $(EXE).exe *.dSYM

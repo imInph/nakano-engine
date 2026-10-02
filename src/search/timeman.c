@@ -5,9 +5,7 @@
 static int64_t min64(int64_t a, int64_t b) { return a < b ? a : b; }
 static int64_t max64(int64_t a, int64_t b) { return a > b ? a : b; }
 
-void mmi_limits_clear(MmiLimits *limits) {
-    *limits = (MmiLimits){{-1, -1}, {0, 0}, 0, 0, 0, 0, false};
-}
+void mmi_limits_clear(MmiLimits *limits) { *limits = (MmiLimits){{-1, -1}, {0, 0}, 0, 0, 0, 0, false}; }
 
 void mmi_time_init(MmiTimeManager *tm, const MmiLimits *limits, MmiColor us, int64_t move_overhead) {
     tm->start = mmi_now_ms();

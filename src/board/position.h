@@ -55,9 +55,7 @@ static inline MmiBitboard mmi_occupied(const MmiPosition *pos) { return pos->by_
 static inline MmiBitboard mmi_pieces(const MmiPosition *pos, MmiColor c, MmiPieceType pt) {
     return pos->by_color[c] & pos->by_type[pt];
 }
-static inline int mmi_king_square(const MmiPosition *pos, MmiColor c) {
-    return mmi_lsb(mmi_pieces(pos, c, MMI_KING));
-}
+static inline int mmi_king_square(const MmiPosition *pos, MmiColor c) { return mmi_lsb(mmi_pieces(pos, c, MMI_KING)); }
 static inline bool mmi_in_check(const MmiPosition *pos) { return mmi_state(pos)->checkers != 0; }
 static inline MmiPiece mmi_piece_on(const MmiPosition *pos, int sq) { return pos->board[sq]; }
 

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format 21
+        run: pip install "clang-format>=21,<22"
+      - name: Check formatting
+        run: make format-check
+
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-gcc, os: ubuntu-latest, cc: gcc, shell: bash }
+          - { name: linux-clang, os: ubuntu-latest, cc: clang, shell: bash }
+          - { name: macos-clang, os: macos-latest, cc: clang, shell: bash }
+          - { name: windows-mingw, os: windows-latest, cc: gcc, shell: "msys2 {0}" }
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: make mingw-w64-x86_64-gcc
+      - name: Build
+        run: make CC=${{ matrix.cc }}
+      - name: Test
+        run: sh tests/run_tests.sh ./mmi_engine
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Allow ThreadSanitizer on recent kernels
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: AddressSanitizer + UndefinedBehaviorSanitizer
+        run: make debug CC=clang && sh tests/run_tests.sh ./mmi_engine-debug 4
+      - name: ThreadSanitizer
+        run: make tsan CC=clang && sh tests/run_tests.sh ./mmi_engine-tsan 3

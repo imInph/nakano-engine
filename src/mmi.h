@@ -20,15 +20,7 @@ typedef int MmiValue;
 
 typedef enum { MMI_WHITE, MMI_BLACK } MmiColor;
 
-typedef enum {
-    MMI_NO_PIECE_TYPE,
-    MMI_PAWN,
-    MMI_KNIGHT,
-    MMI_BISHOP,
-    MMI_ROOK,
-    MMI_QUEEN,
-    MMI_KING
-} MmiPieceType;
+typedef enum { MMI_NO_PIECE_TYPE, MMI_PAWN, MMI_KNIGHT, MMI_BISHOP, MMI_ROOK, MMI_QUEEN, MMI_KING } MmiPieceType;
 
 /* A piece is its type with the colour in bit 3: white 1-6, black 9-14. */
 typedef enum {
@@ -62,13 +54,7 @@ typedef enum {
 } MmiSquare;
 /* clang-format on */
 
-enum {
-    MMI_WHITE_OO = 1,
-    MMI_WHITE_OOO = 2,
-    MMI_BLACK_OO = 4,
-    MMI_BLACK_OOO = 8,
-    MMI_ALL_CASTLING = 15
-};
+enum { MMI_WHITE_OO = 1, MMI_WHITE_OOO = 2, MMI_BLACK_OO = 4, MMI_BLACK_OOO = 8, MMI_ALL_CASTLING = 15 };
 
 /*
  * A move is 16 bits: destination (bits 0-5), origin (6-11), promotion piece
