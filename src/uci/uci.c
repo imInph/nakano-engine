@@ -15,8 +15,8 @@
 #define MMI_OVERHEAD_MAX 5000
 
 static MmiPosition position;
-/* The running search, if any, ends only on "stop". */
-static bool search_unbounded;
+/* The running search, if any, ends only on "stop" (or, while pondering, "ponderhit"). */
+static bool search_infinite, search_pondering;
 
 static void reply(const char *text) {
     fputs(text, stdout);
@@ -30,6 +30,8 @@ static void cmd_uci(void) {
     printf("option name Hash type spin default %d min 1 max %d\n", MMI_HASH_DEFAULT, MMI_HASH_MAX);
     printf("option name Clear Hash type button\n");
     printf("option name Move Overhead type spin default %d min 0 max %d\n", MMI_OVERHEAD_DEFAULT, MMI_OVERHEAD_MAX);
+    /* Tells the GUI it may send "go ponder"; the engine needs no setting for it. */
+    printf("option name Ponder type check default false\n");
     reply("uciok");
 }
 
@@ -49,6 +51,8 @@ static void cmd_setoption(char *args) {
         if (mb < 1) mb = 1;
         if (mb > MMI_HASH_MAX) mb = MMI_HASH_MAX;
         if (!mmi_tt_resize((size_t)mb)) reply("info string mmi: hash allocation failed, keeping the old table");
+    } else if (strcmp(name, "Ponder") == 0) {
+        /* Pondering is driven by "go ponder" alone. */
     } else if (strcmp(name, "Clear Hash") == 0) {
         mmi_tt_clear();
     } else if (strcmp(name, "Move Overhead") == 0 && value) {
@@ -101,41 +105,66 @@ static long long parse_clamped(const char *s, long long lo, long long hi) {
     return v < lo ? lo : v > hi ? hi : v;
 }
 
+static bool is_go_keyword(const char *tok) {
+    static const char *const keywords[] = {"searchmoves", "ponder", "wtime", "btime", "winc",     "binc",
+                                           "movestogo",   "depth",  "nodes", "mate",  "movetime", "infinite"};
+    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
+        if (strcmp(tok, keywords[i]) == 0) return true;
+    return false;
+}
+
 static void cmd_go(char *args) {
     /* About 31 years: small enough that the time manager's arithmetic on clock values cannot overflow. */
     const long long max_ms = 1000000000000LL;
-    MmiLimits limits;
+    static MmiLimits limits;
     mmi_limits_clear(&limits);
-    for (char *tok = strtok(args, " \t"); tok; tok = strtok(NULL, " \t")) {
-        /* Keywords without a value, and unknown words, consume only themselves. */
-        bool takes_value = strcmp(tok, "wtime") == 0 || strcmp(tok, "btime") == 0 || strcmp(tok, "winc") == 0 ||
-                           strcmp(tok, "binc") == 0 || strcmp(tok, "movetime") == 0 || strcmp(tok, "movestogo") == 0 ||
-                           strcmp(tok, "depth") == 0 || strcmp(tok, "nodes") == 0;
-        if (strcmp(tok, "infinite") == 0) limits.infinite = true;
-        if (!takes_value) continue;
 
-        const char *value = strtok(NULL, " \t");
-        /* A clock below zero (some GUIs report overtime this way) means no time left, not no clock. */
-        if (strcmp(tok, "wtime") == 0)
-            limits.time[MMI_WHITE] = parse_clamped(value, 0, max_ms);
-        else if (strcmp(tok, "btime") == 0)
-            limits.time[MMI_BLACK] = parse_clamped(value, 0, max_ms);
-        else if (strcmp(tok, "winc") == 0)
-            limits.inc[MMI_WHITE] = parse_clamped(value, 0, max_ms);
-        else if (strcmp(tok, "binc") == 0)
-            limits.inc[MMI_BLACK] = parse_clamped(value, 0, max_ms);
-        else if (strcmp(tok, "movetime") == 0)
-            limits.movetime = parse_clamped(value, 1, max_ms);
-        else if (strcmp(tok, "movestogo") == 0)
-            limits.movestogo = (int)parse_clamped(value, 1, 1000);
-        else if (strcmp(tok, "depth") == 0)
-            limits.depth = (int)parse_clamped(value, 1, MMI_MAX_PLY - 1);
-        else
-            limits.nodes = (uint64_t)parse_clamped(value, 1, LLONG_MAX);
-        if (!value) break;
+    char *toks[1024];
+    int n = 0;
+    for (char *tok = strtok(args, " \t"); tok && n < 1024; tok = strtok(NULL, " \t")) toks[n++] = tok;
+
+    for (int i = 0; i < n; i++) {
+        const char *tok = toks[i];
+        if (strcmp(tok, "infinite") == 0) {
+            limits.infinite = true;
+        } else if (strcmp(tok, "ponder") == 0) {
+            limits.ponder = true;
+        } else if (strcmp(tok, "searchmoves") == 0) {
+            /* Takes every following move up to the next keyword; illegal and repeated moves are dropped. */
+            while (i + 1 < n && !is_go_keyword(toks[i + 1])) {
+                MmiMove m = mmi_move_from_uci(&position, toks[++i]);
+                bool seen = m == MMI_MOVE_NONE;
+                for (int j = 0; j < limits.searchmoves_count && !seen; j++) seen = limits.searchmoves[j] == m;
+                if (!seen) limits.searchmoves[limits.searchmoves_count++] = m;
+            }
+        } else if (is_go_keyword(tok)) {
+            /* A keyword missing its value reads as the lowest allowed value. */
+            const char *value = i + 1 < n && !is_go_keyword(toks[i + 1]) ? toks[++i] : NULL;
+            /* A clock below zero (some GUIs report overtime this way) means no time left, not no clock. */
+            if (strcmp(tok, "wtime") == 0)
+                limits.time[MMI_WHITE] = parse_clamped(value, 0, max_ms);
+            else if (strcmp(tok, "btime") == 0)
+                limits.time[MMI_BLACK] = parse_clamped(value, 0, max_ms);
+            else if (strcmp(tok, "winc") == 0)
+                limits.inc[MMI_WHITE] = parse_clamped(value, 0, max_ms);
+            else if (strcmp(tok, "binc") == 0)
+                limits.inc[MMI_BLACK] = parse_clamped(value, 0, max_ms);
+            else if (strcmp(tok, "movetime") == 0)
+                limits.movetime = parse_clamped(value, 1, max_ms);
+            else if (strcmp(tok, "movestogo") == 0)
+                limits.movestogo = (int)parse_clamped(value, 1, 1000);
+            else if (strcmp(tok, "depth") == 0)
+                limits.depth = (int)parse_clamped(value, 1, MMI_MAX_PLY - 1);
+            else if (strcmp(tok, "mate") == 0)
+                limits.mate = (int)parse_clamped(value, 1, MMI_MAX_PLY / 2);
+            else
+                limits.nodes = (uint64_t)parse_clamped(value, 1, LLONG_MAX);
+        }
+        /* Unknown words are skipped on their own. */
     }
-    search_unbounded = limits.infinite || (limits.time[position.side] < 0 && limits.movetime == 0 &&
-                                           limits.depth == 0 && limits.nodes == 0);
+    search_infinite = limits.infinite || (limits.time[position.side] < 0 && limits.movetime == 0 && limits.depth == 0 &&
+                                          limits.mate == 0 && limits.nodes == 0);
+    search_pondering = limits.ponder;
     mmi_search_start(&position, &limits);
 }
 
@@ -144,7 +173,7 @@ static void cmd_go(char *args) {
  * search that only "stop" can end is stopped first, or waiting would hang.
  */
 static void finish_search(void) {
-    if (search_unbounded) mmi_search_stop();
+    if (search_infinite || search_pondering) mmi_search_stop();
     mmi_search_wait();
 }
 
@@ -185,6 +214,9 @@ void mmi_uci_loop(void) {
         } else if (strcmp(cmd, "go") == 0) {
             finish_search();
             cmd_go(args);
+        } else if (strcmp(cmd, "ponderhit") == 0) {
+            search_pondering = false;
+            mmi_search_ponderhit();
         } else if (strcmp(cmd, "stop") == 0) {
             stop_search();
         } else if (strcmp(cmd, "quit") == 0) {

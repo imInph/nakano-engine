@@ -20,6 +20,7 @@ typedef struct {
     bool silent;
     MmiMove iteration_best;
     MmiValue iteration_score;
+    MmiMove ponder_move;
     MmiMove pv[MMI_MAX_PLY + 1][MMI_MAX_PLY + 1];
     int pv_length[MMI_MAX_PLY + 1];
 } MmiSearchWorker;
@@ -28,15 +29,19 @@ static MmiSearchWorker worker;
 static MmiThread search_thread;
 static bool thread_running;
 static atomic_bool stop_requested;
+/* While pondering the clock does not count, so no time limit applies. */
+static atomic_bool pondering;
 static int64_t move_overhead = 10;
 
 void mmi_search_set_move_overhead(int ms) { move_overhead = ms; }
 
 static bool stopped(void) { return atomic_load_explicit(&stop_requested, memory_order_relaxed); }
+static bool is_pondering(void) { return atomic_load_explicit(&pondering, memory_order_relaxed); }
 
 static void check_limits(MmiSearchWorker *w) {
     if (w->limits.nodes && w->nodes >= w->limits.nodes) atomic_store(&stop_requested, true);
-    if (w->tm.maximum >= 0 && mmi_time_elapsed(&w->tm) >= w->tm.maximum) atomic_store(&stop_requested, true);
+    if (w->tm.maximum >= 0 && !is_pondering() && mmi_time_elapsed(&w->tm) >= w->tm.maximum)
+        atomic_store(&stop_requested, true);
 }
 
 static void count_node(MmiSearchWorker *w, int ply) {
@@ -89,6 +94,19 @@ static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int p
     return best;
 }
 
+/* Keeps only the root moves "go searchmoves" allows. */
+static void restrict_root(const MmiSearchWorker *w, MmiMoveList *list) {
+    if (w->limits.searchmoves_count == 0) return;
+    int kept = 0;
+    for (int i = 0; i < list->count; i++)
+        for (int j = 0; j < w->limits.searchmoves_count; j++)
+            if (list->moves[i] == w->limits.searchmoves[j]) {
+                list->moves[kept++] = list->moves[i];
+                break;
+            }
+    list->count = kept;
+}
+
 static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int depth, int ply) {
     MmiPosition *pos = &w->pos;
     bool root = ply == 0, pv_node = beta - alpha > 1;
@@ -125,6 +143,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     int scores[MMI_MAX_MOVES];
     mmi_generate(pos, &list, MMI_GEN_ALL);
     if (list.count == 0) return in_check ? -MMI_VALUE_MATE + ply : MMI_VALUE_DRAW;
+    if (root) restrict_root(w, &list);
     mmi_order_score(pos, &list, scores, tt_move);
 
     MmiValue best = -MMI_VALUE_INFINITE;
@@ -181,18 +200,29 @@ static void print_info(const MmiSearchWorker *w, int depth, MmiValue score) {
     fflush(stdout);
 }
 
+/* The second move of the PV, if the PV starts with best: the reply to ponder on. */
+static MmiMove pv_reply(const MmiSearchWorker *w, MmiMove best) {
+    return w->pv_length[0] > 1 && w->pv[0][0] == best ? w->pv[0][1] : MMI_MOVE_NONE;
+}
+
 static void iterate(MmiSearchWorker *w) {
     MmiMoveList root_moves;
     mmi_generate(&w->pos, &root_moves, MMI_GEN_ALL);
+    restrict_root(w, &root_moves);
     MmiMove best = root_moves.count ? root_moves.moves[0] : MMI_MOVE_NONE;
     int max_depth = w->limits.depth > 0 && w->limits.depth < MMI_MAX_PLY - 1 ? w->limits.depth : MMI_MAX_PLY - 1;
+    if (w->limits.mate > 0 && 2 * w->limits.mate < max_depth) max_depth = 2 * w->limits.mate;
+    w->ponder_move = MMI_MOVE_NONE;
 
     for (int depth = 1; depth <= max_depth && root_moves.count; depth++) {
         w->iteration_best = MMI_MOVE_NONE;
         w->seldepth = 0;
         MmiValue score = search(w, -MMI_VALUE_INFINITE, MMI_VALUE_INFINITE, depth, 0);
         /* A root move that raised alpha was searched in full, so it is safe to use even after a stop. */
-        if (w->iteration_best != MMI_MOVE_NONE) best = w->iteration_best;
+        if (w->iteration_best != MMI_MOVE_NONE) {
+            best = w->iteration_best;
+            w->ponder_move = pv_reply(w, best);
+        }
         if (stopped()) {
             /* Report the partial result so the last PV starts with the move we play. */
             if (!w->silent && w->iteration_best != MMI_MOVE_NONE) print_info(w, depth, w->iteration_score);
@@ -203,16 +233,22 @@ static void iterate(MmiSearchWorker *w) {
         /* Full-width search: a mate in n plies found at depth >= n cannot get shorter. */
         int mate_plies = MMI_VALUE_MATE - (score < 0 ? -score : score);
         if (mate_plies <= MMI_MAX_PLY && depth >= mate_plies) break;
-        if (w->tm.optimum >= 0 && mmi_time_elapsed(&w->tm) >= w->tm.optimum) break;
+        if (w->limits.mate > 0 && score >= MMI_VALUE_MATE_IN_MAX_PLY && (mate_plies + 1) / 2 <= w->limits.mate) break;
+        if (w->tm.optimum >= 0 && !is_pondering() && mmi_time_elapsed(&w->tm) >= w->tm.optimum) break;
     }
 
-    /* "go infinite" must not answer before "stop". */
-    while (w->limits.infinite && !stopped()) mmi_sleep_ms(1);
+    /* "go infinite" and "go ponder" must not answer before "stop" (or, for ponder, "ponderhit"). */
+    while ((w->limits.infinite || is_pondering()) && !stopped()) mmi_sleep_ms(1);
 
     if (!w->silent) {
-        char move[6];
+        char move[6], reply[6];
         mmi_move_to_uci(best, move);
-        printf("bestmove %s\n", move);
+        if (w->ponder_move != MMI_MOVE_NONE) {
+            mmi_move_to_uci(w->ponder_move, reply);
+            printf("bestmove %s ponder %s\n", move, reply);
+        } else {
+            printf("bestmove %s\n", move);
+        }
         fflush(stdout);
     }
 }
@@ -227,9 +263,12 @@ void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
     worker.silent = false;
     mmi_time_init(&worker.tm, limits, pos->side, move_overhead);
     mmi_tt_new_search();
+    atomic_store(&pondering, limits->ponder);
     atomic_store(&stop_requested, false);
     thread_running = mmi_thread_start(&search_thread, thread_main, &worker);
 }
+
+void mmi_search_ponderhit(void) { atomic_store(&pondering, false); }
 
 void mmi_search_stop(void) { atomic_store(&stop_requested, true); }
 
@@ -248,6 +287,7 @@ uint64_t mmi_search_fixed_depth(const MmiPosition *pos, int depth) {
     worker.silent = true;
     mmi_time_init(&worker.tm, &worker.limits, pos->side, 0);
     mmi_tt_new_search();
+    atomic_store(&pondering, false);
     atomic_store(&stop_requested, false);
     iterate(&worker);
     return worker.nodes;
