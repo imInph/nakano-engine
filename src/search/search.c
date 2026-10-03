@@ -166,23 +166,26 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     mmi_generate(pos, &list, MMI_GEN_ALL);
     if (list.count == 0) return in_check ? -MMI_VALUE_MATE + ply : MMI_VALUE_DRAW;
 
+    /* Static pruning is only for null-window nodes outside check and away from mate scores. */
+    bool prunable = !pv_node && !in_check && beta > -MMI_VALUE_MATE_IN_MAX_PLY && beta < MMI_VALUE_MATE_IN_MAX_PLY;
+    MmiValue eval = prunable ? mmi_evaluate(pos) : MMI_VALUE_NONE;
+
+    /* Reverse futility: this far above beta near the leaves, no reasonable reply brings the score back down. */
+    if (prunable && depth <= 6 && eval - 80 * depth >= beta) return eval;
+
     /*
      * Null move: if passing still leaves the opponent at or below beta after a reduced search, a real move
-     * almost certainly would too. Unsafe in check, right after another null move, and in pawn endings where
-     * passing is often the best move (zugzwang).
+     * almost certainly would too. Unsafe right after another null move, and in pawn endings where passing
+     * is often the best move (zugzwang).
      */
-    if (!pv_node && !in_check && depth >= 3 && mmi_state(pos)->plies_from_null > 0 &&
-        beta > -MMI_VALUE_MATE_IN_MAX_PLY && beta < MMI_VALUE_MATE_IN_MAX_PLY && has_non_pawn_material(pos)) {
-        MmiValue eval = mmi_evaluate(pos);
-        if (eval >= beta) {
-            int r = 3 + depth / 3 + ((eval - beta) / 200 < 3 ? (eval - beta) / 200 : 3);
-            mmi_position_make_null(pos);
-            MmiValue v = -search(w, -beta, -beta + 1, depth - 1 - r, ply + 1);
-            mmi_position_unmake_null(pos);
-            if (stopped()) return 0;
-            /* A mate found after passing proves nothing about the real moves. */
-            if (v >= beta) return v >= MMI_VALUE_MATE_IN_MAX_PLY ? beta : v;
-        }
+    if (prunable && depth >= 3 && eval >= beta && mmi_state(pos)->plies_from_null > 0 && has_non_pawn_material(pos)) {
+        int r = 3 + depth / 3 + ((eval - beta) / 200 < 3 ? (eval - beta) / 200 : 3);
+        mmi_position_make_null(pos);
+        MmiValue v = -search(w, -beta, -beta + 1, depth - 1 - r, ply + 1);
+        mmi_position_unmake_null(pos);
+        if (stopped()) return 0;
+        /* A mate found after passing proves nothing about the real moves. */
+        if (v >= beta) return v >= MMI_VALUE_MATE_IN_MAX_PLY ? beta : v;
     }
 
     if (root) restrict_root(w, &list);
