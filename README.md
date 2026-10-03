@@ -1,8 +1,7 @@
-# mmi_engine
+# Nakano Engine
 
-A UCI chess engine in C, built together by inph (inphish), Mai (MaiEngine) and
-alp (Morstilia). `mmi_engine` is the codename; the public name is not chosen
-yet.
+A UCI chess engine in C, built together by inph [(inphish)](https://github.com/imInph/inphish), Mai [(MaiEngine)](https://github.com/Justmaii/MaiEngineV3) and
+Alp [(Morstilia)](https://github.com/ALPDM447/MorstiliaChessEngine).
 
 This is the starting skeleton: correct and playable, but deliberately simple.
 Each part is meant to be replaced by its owner (see `AGENTS.md`).
