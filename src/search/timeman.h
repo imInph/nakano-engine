@@ -16,7 +16,8 @@ typedef struct {
     uint64_t nodes;
     bool infinite;
     bool ponder;
-    int searchmoves_count; /* 0: search every root move */
+    bool searchmoves_given; /* search only the moves listed, even if none of them is legal */
+    int searchmoves_count;
     MmiMove searchmoves[MMI_MAX_MOVES];
 } MmiLimits;
 

@@ -131,6 +131,7 @@ static void cmd_go(char *args) {
             limits.ponder = true;
         } else if (strcmp(tok, "searchmoves") == 0) {
             /* Takes every following move up to the next keyword; illegal and repeated moves are dropped. */
+            limits.searchmoves_given = true;
             while (i + 1 < n && !is_go_keyword(toks[i + 1])) {
                 MmiMove m = mmi_move_from_uci(&position, toks[++i]);
                 bool seen = m == MMI_MOVE_NONE;
