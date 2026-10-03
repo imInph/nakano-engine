@@ -248,10 +248,41 @@ static void iterate(MmiSearchWorker *w) {
     if (w->limits.mate > 0 && 2 * w->limits.mate < max_depth) max_depth = 2 * w->limits.mate;
     w->ponder_move = MMI_MOVE_NONE;
 
+    MmiValue previous = 0;
     for (int depth = 1; depth <= max_depth && root_moves.count; depth++) {
         w->iteration_best = MMI_MOVE_NONE;
         w->seldepth = 0;
-        MmiValue score = search(w, -MMI_VALUE_INFINITE, MMI_VALUE_INFINITE, depth, 0);
+
+        /*
+         * Aspiration: from depth 5 the score rarely moves far between iterations, so search a narrow window
+         * around the last one and widen it on a fail. Mate scores move in steps too large for a window.
+         */
+        MmiValue alpha = -MMI_VALUE_INFINITE, beta = MMI_VALUE_INFINITE, delta = 25;
+        if (depth >= 5 && previous > -MMI_VALUE_MATE_IN_MAX_PLY && previous < MMI_VALUE_MATE_IN_MAX_PLY) {
+            alpha = previous - delta;
+            beta = previous + delta;
+        }
+        MmiValue score;
+        for (;;) {
+            score = search(w, alpha, beta, depth, 0);
+            if (stopped()) break;
+            if (score <= alpha) {
+                beta = (alpha + beta) / 2;
+                alpha = score - delta;
+            } else if (score >= beta) {
+                beta = score + delta;
+            } else {
+                break;
+            }
+            delta += delta / 2;
+            if (delta > 400) {
+                alpha = -MMI_VALUE_INFINITE;
+                beta = MMI_VALUE_INFINITE;
+            }
+            if (alpha < -MMI_VALUE_INFINITE) alpha = -MMI_VALUE_INFINITE;
+            if (beta > MMI_VALUE_INFINITE) beta = MMI_VALUE_INFINITE;
+        }
+        previous = score;
         /* A root move that raised alpha was searched in full, so it is safe to use even after a stop. */
         if (w->iteration_best != MMI_MOVE_NONE) {
             best = w->iteration_best;
