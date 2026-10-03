@@ -3,7 +3,7 @@
 #include "search/see.h"
 
 void mmi_order_score(const MmiPosition *pos, const MmiMoveList *list, int scores[MMI_MAX_MOVES], MmiMove tt_move,
-                     const MmiMove killers[2], const int *history) {
+                     const MmiMove killers[2], const MmiButterflyHistory *history) {
     for (int i = 0; i < list->count; i++) {
         MmiMove m = list->moves[i];
         int score = 0;
@@ -20,7 +20,7 @@ void mmi_order_score(const MmiPosition *pos, const MmiMoveList *list, int scores
         } else if (killers && m == killers[1]) {
             score = 899000;
         } else if (history) {
-            score = history[mmi_move_from(m) * 64 + mmi_move_to(m)];
+            score = history->score[mmi_move_from(m)][mmi_move_to(m)];
         }
         if (mmi_move_type(m) == MMI_MOVE_PROMOTION && m != tt_move)
             score += mmi_move_promotion(m) == MMI_QUEEN ? 1000000 : -1000;

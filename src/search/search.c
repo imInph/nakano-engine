@@ -25,7 +25,7 @@ typedef struct {
     /* Quiet moves that recently caused a beta cutoff at each ply, newest first. */
     MmiMove killers[MMI_MAX_PLY + 1][2];
     /* Butterfly history by side, from and to: how often a quiet move caused a cutoff, minus how often it failed to. */
-    int history[2][64][64];
+    MmiButterflyHistory history[2];
     int pv_length[MMI_MAX_PLY + 1];
 } MmiSearchWorker;
 
@@ -160,7 +160,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     mmi_generate(pos, &list, MMI_GEN_ALL);
     if (list.count == 0) return in_check ? -MMI_VALUE_MATE + ply : MMI_VALUE_DRAW;
     if (root) restrict_root(w, &list);
-    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side][0][0]);
+    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side]);
 
     MmiValue best = -MMI_VALUE_INFINITE;
     MmiMove best_move = MMI_MOVE_NONE;
@@ -198,7 +198,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
                         }
                         /* Reward the cutoff move and penalise the quiets searched before it, which failed. */
                         int bonus = depth * depth * 16 < 1600 ? depth * depth * 16 : 1600;
-                        int (*h)[64] = w->history[pos->side];
+                        int (*h)[64] = w->history[pos->side].score;
                         update_history(&h[mmi_move_from(m)][mmi_move_to(m)], bonus);
                         for (int j = 0; j < quiet_count; j++)
                             update_history(&h[mmi_move_from(quiets_tried[j])][mmi_move_to(quiets_tried[j])], -bonus);
