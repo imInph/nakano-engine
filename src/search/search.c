@@ -22,6 +22,8 @@ typedef struct {
     MmiValue iteration_score;
     MmiMove ponder_move;
     MmiMove pv[MMI_MAX_PLY + 1][MMI_MAX_PLY + 1];
+    /* Quiet moves that recently caused a beta cutoff at each ply, newest first. */
+    MmiMove killers[MMI_MAX_PLY + 1][2];
     int pv_length[MMI_MAX_PLY + 1];
 } MmiSearchWorker;
 
@@ -75,7 +77,7 @@ static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int p
     int scores[MMI_MAX_MOVES];
     mmi_generate(pos, &list, in_check ? MMI_GEN_ALL : MMI_GEN_CAPTURES);
     if (in_check && list.count == 0) return -MMI_VALUE_MATE + ply;
-    mmi_order_score(pos, &list, scores, MMI_MOVE_NONE);
+    mmi_order_score(pos, &list, scores, MMI_MOVE_NONE, NULL);
 
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
@@ -144,7 +146,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     mmi_generate(pos, &list, MMI_GEN_ALL);
     if (list.count == 0) return in_check ? -MMI_VALUE_MATE + ply : MMI_VALUE_DRAW;
     if (root) restrict_root(w, &list);
-    mmi_order_score(pos, &list, scores, tt_move);
+    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply]);
 
     MmiValue best = -MMI_VALUE_INFINITE;
     MmiMove best_move = MMI_MOVE_NONE;
@@ -171,7 +173,13 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
                     w->iteration_best = m;
                     w->iteration_score = v;
                 }
-                if (v >= beta) break;
+                if (v >= beta) {
+                    if (!mmi_is_capture(pos, m) && mmi_move_type(m) != MMI_MOVE_PROMOTION && w->killers[ply][0] != m) {
+                        w->killers[ply][1] = w->killers[ply][0];
+                        w->killers[ply][0] = m;
+                    }
+                    break;
+                }
             }
         }
     }
@@ -260,6 +268,7 @@ void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
     memcpy(&worker.pos, pos, sizeof(*pos));
     worker.limits = *limits;
     worker.nodes = 0;
+    memset(worker.killers, 0, sizeof(worker.killers));
     worker.silent = false;
     mmi_time_init(&worker.tm, limits, pos->side, move_overhead);
     mmi_tt_new_search();
@@ -284,6 +293,7 @@ uint64_t mmi_search_fixed_depth(const MmiPosition *pos, int depth) {
     mmi_limits_clear(&worker.limits);
     worker.limits.depth = depth;
     worker.nodes = 0;
+    memset(worker.killers, 0, sizeof(worker.killers));
     worker.silent = true;
     mmi_time_init(&worker.tm, &worker.limits, pos->side, 0);
     mmi_tt_new_search();
