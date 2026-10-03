@@ -22,7 +22,7 @@ typedef struct {
 
 typedef struct {
     int64_t start;
-    int64_t optimum; /* do not start a new iteration after this; -1 if unlimited */
+    int64_t optimum; /* target time per move; -1 if there is no clock to manage */
     int64_t maximum; /* abort the search at this point; -1 if unlimited */
 } MmiTimeManager;
 

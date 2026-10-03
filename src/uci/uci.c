@@ -11,7 +11,7 @@
 
 #define MMI_HASH_DEFAULT 16
 #define MMI_HASH_MAX 65536
-#define MMI_OVERHEAD_DEFAULT 10
+#define MMI_OVERHEAD_DEFAULT 30
 #define MMI_OVERHEAD_MAX 5000
 
 static MmiPosition position;
