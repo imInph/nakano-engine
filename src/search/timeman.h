@@ -12,8 +12,12 @@ typedef struct {
     int64_t movetime;
     int movestogo;
     int depth;
+    int mate; /* in moves */
     uint64_t nodes;
     bool infinite;
+    bool ponder;
+    int searchmoves_count; /* 0: search every root move */
+    MmiMove searchmoves[MMI_MAX_MOVES];
 } MmiLimits;
 
 typedef struct {

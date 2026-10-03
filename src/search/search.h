@@ -11,6 +11,8 @@ void mmi_search_set_move_overhead(int ms);
  * and finally "bestmove". Call mmi_search_wait before starting another search.
  */
 void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits);
+/* The opponent played the move the search was pondering on: from now on the clock counts. */
+void mmi_search_ponderhit(void);
 /* Asks a running search to stop; it still prints its best move. */
 void mmi_search_stop(void);
 /* Blocks until the current search, if any, has finished. */
