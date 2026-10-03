@@ -211,6 +211,14 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
         bool quiet = is_quiet(pos, m);
+        /*
+         * Late move pruning: near the leaves of a null-window node, once enough quiet moves have failed, the
+         * rest (ordered worse) almost never succeed. Not while looking for a mate (prunable excludes mate-score
+         * windows), where a late quiet move may be the mating one, and only after some move has kept us out of
+         * a mated score.
+         */
+        if (prunable && quiet && depth <= 4 && best > -MMI_VALUE_MATE_IN_MAX_PLY && quiet_count >= 3 + depth * depth)
+            continue;
         MmiValue v;
         mmi_position_make(pos, m);
         if (i == 0) {
