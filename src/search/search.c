@@ -35,7 +35,7 @@ static bool thread_running;
 static atomic_bool stop_requested;
 /* While pondering the clock does not count, so no time limit applies. */
 static atomic_bool pondering;
-static int64_t move_overhead = 10;
+static int64_t move_overhead = 30;
 
 void mmi_search_set_move_overhead(int ms) { move_overhead = ms; }
 
@@ -263,12 +263,13 @@ static void iterate(MmiSearchWorker *w) {
             break;
         }
         if (!w->silent) print_info(w, depth, score);
-        if (root_moves.count == 1 && w->tm.optimum >= 0) break;
+        if (root_moves.count == 1 && w->tm.maximum >= 0) break;
         /* Full-width search: a mate in n plies found at depth >= n cannot get shorter. */
         int mate_plies = MMI_VALUE_MATE - (score < 0 ? -score : score);
         if (mate_plies <= MMI_MAX_PLY && depth >= mate_plies) break;
         if (w->limits.mate > 0 && score >= MMI_VALUE_MATE_IN_MAX_PLY && (mate_plies + 1) / 2 <= w->limits.mate) break;
-        if (w->tm.optimum >= 0 && !is_pondering() && mmi_time_elapsed(&w->tm) >= w->tm.optimum) break;
+        /* The next iteration takes several times as long as this one, so past half the target it would not finish. */
+        if (w->tm.optimum >= 0 && !is_pondering() && mmi_time_elapsed(&w->tm) >= w->tm.optimum / 2) break;
     }
 
     /* "go infinite" and "go ponder" must not answer before "stop" (or, for ponder, "ponderhit"). */
