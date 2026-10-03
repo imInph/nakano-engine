@@ -25,9 +25,9 @@ else
 endif
 
 ifeq ($(OS),Windows_NT)
-  LIBS =
+  LIBS = -lm
 else
-  LIBS = -lpthread
+  LIBS = -lpthread -lm
 endif
 
 WARN = -Wall -Wextra -Wshadow -Wpedantic -Werror

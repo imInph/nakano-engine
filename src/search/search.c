@@ -1,6 +1,7 @@
 #include "search/search.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -60,6 +61,18 @@ static void update_pv(MmiSearchWorker *w, int ply, MmiMove m) {
 }
 
 #define HISTORY_MAX 16384
+
+/* Late move reduction by depth and move number. */
+static int reductions[64][64];
+
+/* Called before every search starts, on the thread that starts it, so the table is ready before any reader. */
+static void init_reductions(void) {
+    static bool done;
+    if (done) return;
+    for (int d = 1; d < 64; d++)
+        for (int m = 1; m < 64; m++) reductions[d][m] = (int)(0.75 + log(d) * log(m) / 2.25);
+    done = true;
+}
 
 static bool has_non_pawn_material(const MmiPosition *pos) {
     MmiColor us = pos->side;
@@ -203,7 +216,21 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
         if (i == 0) {
             v = -search(w, -beta, -alpha, depth - 1, ply + 1);
         } else {
-            v = -search(w, -alpha - 1, -alpha, depth - 1, ply + 1);
+            /*
+             * Late move reductions: well-ordered quiet moves this late rarely matter, so search them shallower
+             * first and only at full depth if they beat alpha. Never for moves that check or escape check.
+             */
+            int r = 0;
+            if (depth >= 3 && i >= 2 && quiet && !in_check && !mmi_in_check(pos)) {
+                r = reductions[depth < 63 ? depth : 63][i < 63 ? i : 63];
+                if (pv_node) r--;
+                if (m == w->killers[ply][0] || m == w->killers[ply][1]) r--;
+                r -= w->history[!pos->side].score[mmi_move_from(m)][mmi_move_to(m)] / 8192;
+                if (r < 0) r = 0;
+                if (r > depth - 2) r = depth - 2;
+            }
+            v = -search(w, -alpha - 1, -alpha, depth - 1 - r, ply + 1);
+            if (v > alpha && r > 0) v = -search(w, -alpha - 1, -alpha, depth - 1, ply + 1);
             if (v > alpha && v < beta) v = -search(w, -beta, -alpha, depth - 1, ply + 1);
         }
         mmi_position_unmake(pos, m);
@@ -352,6 +379,7 @@ static void thread_main(void *arg) { iterate(arg); }
 
 void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
     mmi_search_wait();
+    init_reductions();
     memcpy(&worker.pos, pos, sizeof(*pos));
     worker.limits = *limits;
     worker.nodes = 0;
@@ -377,6 +405,7 @@ void mmi_search_wait(void) {
 
 uint64_t mmi_search_fixed_depth(const MmiPosition *pos, int depth) {
     mmi_search_wait();
+    init_reductions();
     memcpy(&worker.pos, pos, sizeof(*pos));
     mmi_limits_clear(&worker.limits);
     worker.limits.depth = depth;
