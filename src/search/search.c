@@ -112,7 +112,7 @@ static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int p
 
 /* Keeps only the root moves "go searchmoves" allows. */
 static void restrict_root(const MmiSearchWorker *w, MmiMoveList *list) {
-    if (w->limits.searchmoves_count == 0) return;
+    if (!w->limits.searchmoves_given) return;
     int kept = 0;
     for (int i = 0; i < list->count; i++)
         for (int j = 0; j < w->limits.searchmoves_count; j++)
