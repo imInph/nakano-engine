@@ -61,6 +61,11 @@ static void update_pv(MmiSearchWorker *w, int ply, MmiMove m) {
 
 #define HISTORY_MAX 16384
 
+static bool has_non_pawn_material(const MmiPosition *pos) {
+    MmiColor us = pos->side;
+    return (pos->by_color[us] & ~pos->by_type[MMI_PAWN] & ~pos->by_type[MMI_KING]) != 0;
+}
+
 /* Neither a capture nor a promotion: the moves killers and history are about. */
 static bool is_quiet(const MmiPosition *pos, MmiMove m) {
     return !mmi_is_capture(pos, m) && mmi_move_type(m) != MMI_MOVE_PROMOTION;
@@ -155,10 +160,31 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
             return v;
     }
 
+    /* Generated before any pruning: with no legal move the result is mate or stalemate, whatever the evaluation. */
     MmiMoveList list;
     int scores[MMI_MAX_MOVES];
     mmi_generate(pos, &list, MMI_GEN_ALL);
     if (list.count == 0) return in_check ? -MMI_VALUE_MATE + ply : MMI_VALUE_DRAW;
+
+    /*
+     * Null move: if passing still leaves the opponent at or below beta after a reduced search, a real move
+     * almost certainly would too. Unsafe in check, right after another null move, and in pawn endings where
+     * passing is often the best move (zugzwang).
+     */
+    if (!pv_node && !in_check && depth >= 3 && mmi_state(pos)->plies_from_null > 0 &&
+        beta > -MMI_VALUE_MATE_IN_MAX_PLY && beta < MMI_VALUE_MATE_IN_MAX_PLY && has_non_pawn_material(pos)) {
+        MmiValue eval = mmi_evaluate(pos);
+        if (eval >= beta) {
+            int r = 3 + depth / 3 + ((eval - beta) / 200 < 3 ? (eval - beta) / 200 : 3);
+            mmi_position_make_null(pos);
+            MmiValue v = -search(w, -beta, -beta + 1, depth - 1 - r, ply + 1);
+            mmi_position_unmake_null(pos);
+            if (stopped()) return 0;
+            /* A mate found after passing proves nothing about the real moves. */
+            if (v >= beta) return v >= MMI_VALUE_MATE_IN_MAX_PLY ? beta : v;
+        }
+    }
+
     if (root) restrict_root(w, &list);
     mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side]);
 
