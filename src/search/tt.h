@@ -7,23 +7,26 @@
 
 typedef enum { MMI_BOUND_NONE, MMI_BOUND_UPPER, MMI_BOUND_LOWER, MMI_BOUND_EXACT } MmiBound;
 
+/* A copy of a stored entry. Entries can be overwritten by other threads, so probes never hand out pointers. */
 typedef struct {
-    MmiKey key;
-    int16_t value;
+    MmiValue value; /* as stored: mate scores are relative to the node */
     MmiMove move;
-    int8_t depth;
-    uint8_t bound;
-} MmiTTEntry;
+    int depth;
+    MmiBound bound;
+} MmiTTData;
 
-/* Allocates the largest power-of-two table that fits in mb megabytes and clears it. */
+/* Allocates as many 64-byte clusters as fit in mb megabytes and clears them. */
 bool mmi_tt_resize(size_t mb);
 void mmi_tt_clear(void);
 void mmi_tt_free(void);
 
-/* Returns the entry for key, or NULL if it is not stored. Values are as stored (mate scores ply-adjusted). */
-const MmiTTEntry *mmi_tt_probe(MmiKey key);
+/* Ages the table. Call once per search, before it starts. */
+void mmi_tt_new_search(void);
+
+/* Returns true and fills *out if key is stored. */
+bool mmi_tt_probe(MmiKey key, MmiTTData *out);
 void mmi_tt_store(MmiKey key, MmiValue value, MmiMove move, int depth, MmiBound bound);
-/* Permille of the first 1000 entries in use. */
+/* Permille of the entries in the first 1000 clusters written during the current search. */
 int mmi_tt_hashfull(void);
 
 /* Mate scores are stored relative to the node, not the root. */

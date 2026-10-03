@@ -111,12 +111,13 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     }
 
     MmiKey key = mmi_position_key(pos);
-    const MmiTTEntry *tte = mmi_tt_probe(key);
-    MmiMove tt_move = tte ? tte->move : MMI_MOVE_NONE;
-    if (tte && !pv_node && tte->depth >= depth) {
-        MmiValue v = mmi_value_from_tt(tte->value, ply);
-        if (tte->bound == MMI_BOUND_EXACT || (tte->bound == MMI_BOUND_LOWER && v >= beta) ||
-            (tte->bound == MMI_BOUND_UPPER && v <= alpha))
+    MmiTTData tt;
+    bool tt_hit = mmi_tt_probe(key, &tt);
+    MmiMove tt_move = tt_hit ? tt.move : MMI_MOVE_NONE;
+    if (tt_hit && !pv_node && tt.depth >= depth) {
+        MmiValue v = mmi_value_from_tt(tt.value, ply);
+        if (tt.bound == MMI_BOUND_EXACT || (tt.bound == MMI_BOUND_LOWER && v >= beta) ||
+            (tt.bound == MMI_BOUND_UPPER && v <= alpha))
             return v;
     }
 
@@ -225,6 +226,7 @@ void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
     worker.nodes = 0;
     worker.silent = false;
     mmi_time_init(&worker.tm, limits, pos->side, move_overhead);
+    mmi_tt_new_search();
     atomic_store(&stop_requested, false);
     thread_running = mmi_thread_start(&search_thread, thread_main, &worker);
 }
@@ -245,6 +247,7 @@ uint64_t mmi_search_fixed_depth(const MmiPosition *pos, int depth) {
     worker.nodes = 0;
     worker.silent = true;
     mmi_time_init(&worker.tm, &worker.limits, pos->side, 0);
+    mmi_tt_new_search();
     atomic_store(&stop_requested, false);
     iterate(&worker);
     return worker.nodes;
