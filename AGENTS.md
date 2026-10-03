@@ -27,14 +27,15 @@ the needed change in the pull request or an issue and leave it to the owner.
 
 | Area | Owner | Paths |
 |---|---|---|
-| Board, move generation, perft and correctness tools | Mai | `src/board/`, `tests/perft.epd` |
-| NNUE SIMD kernels (AVX2, NEON, ...) | Mai | `src/nnue/simd/` (to be created) |
+| Board, move generation, Chess960, perft and correctness tools | Mai | `src/board/`, `tests/perft.epd` |
+| NNUE accumulators (incremental updates) and SIMD kernels (AVX2, NEON, ...) | Mai | `src/nnue/accumulator.*`, `src/nnue/simd/` (to be created) |
+| Syzygy tablebase probing | Mai | `src/syzygy/` (to be created) |
 | Search, transposition table, time management, move ordering | inph | `src/search/` |
-| NNUE architecture, loading, accumulators, reference exactness tests | inph | `src/nnue/` except `simd/` (to be created) |
-| UCI, bench, CLI, threads and platform utilities | inph | `src/uci/`, `src/util/`, `src/main.c` |
-| Features: Syzygy, opening book, Chess960, extra UCI options | inph | new directories under `src/` |
+| NNUE architecture, network loading, reference exactness tests | inph | `src/nnue/` except the accumulator and `simd/` (to be created) |
+| UCI, bench, CLI, threads and platform utilities, extra UCI options | inph | `src/uci/`, `src/util/`, `src/main.c` |
 | Build, CI and releases | inph | `Makefile`, `.github/` |
 | Evaluation (everything that turns raw network output into the final score) | alp | `src/eval/` |
+| Opening book | alp | `src/book/` (to be created) |
 | Parameter tuning, testing and match tooling, testing rules | alp | `tools/` (to be created), `tests/run_tests.sh`, `docs/TESTING.md` (to be created) |
 | Shared files | all three | `src/mmi.h`, `AGENTS.md`, `CLAUDE.md`, `.clang-format`, `README.md`, `LICENSE` |
 
@@ -53,8 +54,9 @@ every owner whose code uses them, in a pull request that does nothing else.
 
 **NNUE hook.** Every board change in make/unmake goes through `put_piece`,
 `remove_piece` and `move_piece` in `src/board/position.c`. Accumulator updates
-attach there and nowhere else. Adding that call is a cross-area change (inph's
-NNUE code in Mai's file): agree on it in one small pull request.
+attach there and nowhere else. Mai owns both sides of this hook. The
+accumulator reads weights in the layout defined by inph's network code; agree
+on that layout in one small pull request before either side builds on it.
 
 ## Rules for AI tools
 
