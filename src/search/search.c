@@ -24,6 +24,8 @@ typedef struct {
     MmiMove pv[MMI_MAX_PLY + 1][MMI_MAX_PLY + 1];
     /* Quiet moves that recently caused a beta cutoff at each ply, newest first. */
     MmiMove killers[MMI_MAX_PLY + 1][2];
+    /* Butterfly history by side, from and to: how often a quiet move caused a cutoff, minus how often it failed to. */
+    int history[2][64][64];
     int pv_length[MMI_MAX_PLY + 1];
 } MmiSearchWorker;
 
@@ -57,6 +59,18 @@ static void update_pv(MmiSearchWorker *w, int ply, MmiMove m) {
     w->pv_length[ply] = w->pv_length[ply + 1];
 }
 
+#define HISTORY_MAX 16384
+
+/* Neither a capture nor a promotion: the moves killers and history are about. */
+static bool is_quiet(const MmiPosition *pos, MmiMove m) {
+    return !mmi_is_capture(pos, m) && mmi_move_type(m) != MMI_MOVE_PROMOTION;
+}
+
+/* Gravity keeps entries within +-HISTORY_MAX: the closer an entry is to the bound, the less a bonus moves it. */
+static void update_history(int *entry, int bonus) {
+    *entry += bonus - *entry * (bonus < 0 ? -bonus : bonus) / HISTORY_MAX;
+}
+
 static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int ply) {
     MmiPosition *pos = &w->pos;
     w->pv_length[ply] = ply;
@@ -77,7 +91,7 @@ static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int p
     int scores[MMI_MAX_MOVES];
     mmi_generate(pos, &list, in_check ? MMI_GEN_ALL : MMI_GEN_CAPTURES);
     if (in_check && list.count == 0) return -MMI_VALUE_MATE + ply;
-    mmi_order_score(pos, &list, scores, MMI_MOVE_NONE, NULL);
+    mmi_order_score(pos, &list, scores, MMI_MOVE_NONE, NULL, NULL);
 
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
@@ -146,12 +160,15 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     mmi_generate(pos, &list, MMI_GEN_ALL);
     if (list.count == 0) return in_check ? -MMI_VALUE_MATE + ply : MMI_VALUE_DRAW;
     if (root) restrict_root(w, &list);
-    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply]);
+    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side][0][0]);
 
     MmiValue best = -MMI_VALUE_INFINITE;
     MmiMove best_move = MMI_MOVE_NONE;
+    MmiMove quiets_tried[64];
+    int quiet_count = 0;
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
+        bool quiet = is_quiet(pos, m);
         MmiValue v;
         mmi_position_make(pos, m);
         if (i == 0) {
@@ -174,14 +191,23 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
                     w->iteration_score = v;
                 }
                 if (v >= beta) {
-                    if (!mmi_is_capture(pos, m) && mmi_move_type(m) != MMI_MOVE_PROMOTION && w->killers[ply][0] != m) {
-                        w->killers[ply][1] = w->killers[ply][0];
-                        w->killers[ply][0] = m;
+                    if (quiet) {
+                        if (w->killers[ply][0] != m) {
+                            w->killers[ply][1] = w->killers[ply][0];
+                            w->killers[ply][0] = m;
+                        }
+                        /* Reward the cutoff move and penalise the quiets searched before it, which failed. */
+                        int bonus = depth * depth * 16 < 1600 ? depth * depth * 16 : 1600;
+                        int (*h)[64] = w->history[pos->side];
+                        update_history(&h[mmi_move_from(m)][mmi_move_to(m)], bonus);
+                        for (int j = 0; j < quiet_count; j++)
+                            update_history(&h[mmi_move_from(quiets_tried[j])][mmi_move_to(quiets_tried[j])], -bonus);
                     }
                     break;
                 }
             }
         }
+        if (quiet && quiet_count < 64) quiets_tried[quiet_count++] = m;
     }
 
     MmiBound bound = best >= beta ? MMI_BOUND_LOWER : best_move != MMI_MOVE_NONE ? MMI_BOUND_EXACT : MMI_BOUND_UPPER;
@@ -269,6 +295,7 @@ void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
     worker.limits = *limits;
     worker.nodes = 0;
     memset(worker.killers, 0, sizeof(worker.killers));
+    memset(worker.history, 0, sizeof(worker.history));
     worker.silent = false;
     mmi_time_init(&worker.tm, limits, pos->side, move_overhead);
     mmi_tt_new_search();
@@ -294,6 +321,7 @@ uint64_t mmi_search_fixed_depth(const MmiPosition *pos, int depth) {
     worker.limits.depth = depth;
     worker.nodes = 0;
     memset(worker.killers, 0, sizeof(worker.killers));
+    memset(worker.history, 0, sizeof(worker.history));
     worker.silent = true;
     mmi_time_init(&worker.tm, &worker.limits, pos->side, 0);
     mmi_tt_new_search();
