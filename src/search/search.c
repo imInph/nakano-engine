@@ -36,6 +36,8 @@ typedef struct {
      */
     MmiPieceToHistory *cont_stack[MMI_MAX_PLY + 3];
     int pv_length[MMI_MAX_PLY + 1];
+    /* The move a singular search at each ply leaves out, or none. */
+    MmiMove excluded[MMI_MAX_PLY + 1];
 } MmiSearchWorker;
 
 static MmiSearchWorker worker;
@@ -189,7 +191,10 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     MmiTTData tt;
     bool tt_hit = mmi_tt_probe(key, &tt);
     MmiMove tt_move = tt_hit ? tt.move : MMI_MOVE_NONE;
-    if (tt_hit && !pv_node && tt.depth >= depth) {
+    /* A singular search shares this node's TT entry, which describes the full move list: never cut on it. */
+    MmiMove excluded = w->excluded[ply];
+    bool singular_search = excluded != MMI_MOVE_NONE;
+    if (tt_hit && !pv_node && !singular_search && tt.depth >= depth) {
         MmiValue v = mmi_value_from_tt(tt.value, ply);
         if (tt.bound == MMI_BOUND_EXACT || (tt.bound == MMI_BOUND_LOWER && v >= beta) ||
             (tt.bound == MMI_BOUND_UPPER && v <= alpha))
@@ -207,14 +212,15 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     MmiValue eval = prunable ? mmi_evaluate(pos) : MMI_VALUE_NONE;
 
     /* Reverse futility: this far above beta near the leaves, no reasonable reply brings the score back down. */
-    if (prunable && depth <= 6 && eval - 80 * depth >= beta) return eval;
+    if (prunable && !singular_search && depth <= 6 && eval - 80 * depth >= beta) return eval;
 
     /*
      * Null move: if passing still leaves the opponent at or below beta after a reduced search, a real move
      * almost certainly would too. Unsafe right after another null move, and in pawn endings where passing
      * is often the best move (zugzwang).
      */
-    if (prunable && depth >= 3 && eval >= beta && mmi_state(pos)->plies_from_null > 0 && has_non_pawn_material(pos)) {
+    if (prunable && !singular_search && depth >= 3 && eval >= beta && mmi_state(pos)->plies_from_null > 0 &&
+        has_non_pawn_material(pos)) {
         int r = 3 + depth / 3 + ((eval - beta) / 200 < 3 ? (eval - beta) / 200 : 3);
         stack[0] = &w->continuation[MMI_NO_PIECE][0];
         mmi_position_make_null(pos);
@@ -230,7 +236,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
      * search would almost certainly fail high too. Skipped when the TT already says the margin is out of reach.
      */
     MmiValue probcut_beta = beta + 200;
-    if (prunable && depth >= 5 && probcut_beta < MMI_VALUE_MATE_IN_MAX_PLY &&
+    if (prunable && !singular_search && depth >= 5 && probcut_beta < MMI_VALUE_MATE_IN_MAX_PLY &&
         !(tt_hit && tt.depth >= depth - 3 && mmi_value_from_tt(tt.value, ply) < probcut_beta)) {
         for (int i = 0; i < list.count; i++) {
             MmiMove m = list.moves[i];
@@ -258,6 +264,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     int quiet_count = 0;
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
+        if (m == excluded) continue;
         bool quiet = is_quiet(pos, m);
         /*
          * Late move pruning: near the leaves of a null-window node, once enough quiet moves have failed, the
@@ -284,13 +291,31 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
         if (prunable && depth <= 7 && best > -MMI_VALUE_MATE_IN_MAX_PLY &&
             !mmi_see_ge(pos, m, quiet ? -30 * depth * depth : -90 * depth))
             continue;
+        /*
+         * Singular extension: if every other move fails well below the TT move's lower bound in a reduced
+         * search that leaves it out, the TT move is the only good one here; search it one ply deeper.
+         */
+        int extension = 0;
+        if (!root && !singular_search && depth >= 8 && m == tt_move &&
+            (tt.bound == MMI_BOUND_LOWER || tt.bound == MMI_BOUND_EXACT) && tt.depth >= depth - 3) {
+            MmiValue tt_value = mmi_value_from_tt(tt.value, ply);
+            if (tt_value > -MMI_VALUE_MATE_IN_MAX_PLY && tt_value < MMI_VALUE_MATE_IN_MAX_PLY) {
+                MmiValue singular_beta = tt_value - 2 * depth;
+                w->excluded[ply] = m;
+                MmiValue sv = search(w, singular_beta - 1, singular_beta, (depth - 1) / 2, ply);
+                w->excluded[ply] = MMI_MOVE_NONE;
+                if (stopped()) return 0;
+                if (sv < singular_beta) extension = 1;
+            }
+        }
+        int new_depth = depth - 1 + extension;
         int from = mmi_move_from(m), to = mmi_move_to(m);
         MmiPiece pc = mmi_piece_on(pos, from);
         MmiValue v;
         stack[0] = &w->continuation[pc][to];
         mmi_position_make(pos, m);
         if (i == 0) {
-            v = -search(w, -beta, -alpha, depth - 1, ply + 1);
+            v = -search(w, -beta, -alpha, new_depth, ply + 1);
         } else {
             /*
              * Late move reductions: well-ordered quiet moves this late rarely matter, so search them shallower
@@ -305,9 +330,9 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
                 if (r < 0) r = 0;
                 if (r > depth - 2) r = depth - 2;
             }
-            v = -search(w, -alpha - 1, -alpha, depth - 1 - r, ply + 1);
-            if (v > alpha && r > 0) v = -search(w, -alpha - 1, -alpha, depth - 1, ply + 1);
-            if (v > alpha && v < beta) v = -search(w, -beta, -alpha, depth - 1, ply + 1);
+            v = -search(w, -alpha - 1, -alpha, new_depth - r, ply + 1);
+            if (v > alpha && r > 0) v = -search(w, -alpha - 1, -alpha, new_depth, ply + 1);
+            if (v > alpha && v < beta) v = -search(w, -beta, -alpha, new_depth, ply + 1);
         }
         mmi_position_unmake(pos, m);
         if (stopped()) return 0;
@@ -341,6 +366,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     }
 
     MmiBound bound = best >= beta ? MMI_BOUND_LOWER : best_move != MMI_MOVE_NONE ? MMI_BOUND_EXACT : MMI_BOUND_UPPER;
+    if (singular_search) return best;
     mmi_tt_store(key, mmi_value_to_tt(best, ply), best_move, depth, bound);
     return best;
 }
@@ -453,6 +479,7 @@ static void clear_histories(MmiSearchWorker *w) {
     memset(w->killers, 0, sizeof(w->killers));
     memset(w->history, 0, sizeof(w->history));
     memset(w->continuation, 0, sizeof(w->continuation));
+    memset(w->excluded, 0, sizeof(w->excluded));
     w->cont_stack[0] = w->cont_stack[1] = &w->continuation[MMI_NO_PIECE][0];
 }
 
