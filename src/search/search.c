@@ -114,6 +114,11 @@ static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int p
 
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
+        /*
+         * A capture that loses more than a pawn in the exchange almost never raises alpha here. Out of check
+         * only, where every evasion must be searched.
+         */
+        if (!in_check && !mmi_see_ge(pos, m, -100)) continue;
         mmi_position_make(pos, m);
         MmiValue v = -qsearch(w, -beta, -alpha, ply + 1);
         mmi_position_unmake(pos, m);
