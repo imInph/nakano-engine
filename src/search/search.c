@@ -202,6 +202,28 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
         if (v >= beta) return v >= MMI_VALUE_MATE_IN_MAX_PLY ? beta : v;
     }
 
+    /*
+     * ProbCut: if a capture that wins material clears a margin above beta in a reduced search, the full
+     * search would almost certainly fail high too. Skipped when the TT already says the margin is out of reach.
+     */
+    MmiValue probcut_beta = beta + 200;
+    if (prunable && depth >= 5 && probcut_beta < MMI_VALUE_MATE_IN_MAX_PLY &&
+        !(tt_hit && tt.depth >= depth - 3 && mmi_value_from_tt(tt.value, ply) < probcut_beta)) {
+        for (int i = 0; i < list.count; i++) {
+            MmiMove m = list.moves[i];
+            if (!mmi_is_capture(pos, m) || !mmi_see_ge(pos, m, probcut_beta - eval)) continue;
+            mmi_position_make(pos, m);
+            MmiValue v = -qsearch(w, -probcut_beta, -probcut_beta + 1, ply + 1);
+            if (v >= probcut_beta) v = -search(w, -probcut_beta, -probcut_beta + 1, depth - 4, ply + 1);
+            mmi_position_unmake(pos, m);
+            if (stopped()) return 0;
+            if (v >= probcut_beta) {
+                mmi_tt_store(key, mmi_value_to_tt(v, ply), m, depth - 3, MMI_BOUND_LOWER);
+                return v;
+            }
+        }
+    }
+
     if (root) restrict_root(w, &list);
     mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side]);
 
