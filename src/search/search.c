@@ -219,6 +219,12 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
          */
         if (prunable && quiet && depth <= 4 && best > -MMI_VALUE_MATE_IN_MAX_PLY && quiet_count >= 3 + depth * depth)
             continue;
+        /*
+         * Futility pruning: near the leaves, a quiet move rarely gains more than a margin that grows with depth,
+         * so when even that margin leaves the static score at or below alpha, skip it. Same guards as above.
+         */
+        if (prunable && quiet && depth <= 5 && best > -MMI_VALUE_MATE_IN_MAX_PLY && eval + 100 + 100 * depth <= alpha)
+            continue;
         MmiValue v;
         mmi_position_make(pos, m);
         if (i == 0) {
