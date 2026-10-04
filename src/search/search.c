@@ -28,6 +28,13 @@ typedef struct {
     MmiMove killers[MMI_MAX_PLY + 1][2];
     /* Butterfly history by side, from and to: how often a quiet move caused a cutoff, minus how often it failed to. */
     MmiButterflyHistory history[2];
+    /* Continuation history by an earlier move's piece and destination, then the current quiet move's. */
+    MmiPieceToHistory continuation[MMI_PIECE_NB][64];
+    /*
+     * The continuation table of the move made at each ply, shifted by two so plies -1 and -2 exist. Plies
+     * without a real move (before the root, null moves) share the unused no-piece table.
+     */
+    MmiPieceToHistory *cont_stack[MMI_MAX_PLY + 3];
     int pv_length[MMI_MAX_PLY + 1];
 } MmiSearchWorker;
 
@@ -90,6 +97,15 @@ static void update_history(int *entry, int bonus) {
     *entry += bonus - *entry * (bonus < 0 ? -bonus : bonus) / HISTORY_MAX;
 }
 
+/* Applies bonus to every history table that scores quiet move m at this node. */
+static void update_quiet_histories(MmiSearchWorker *w, MmiPieceToHistory *const *stack, MmiMove m, int bonus) {
+    int from = mmi_move_from(m), to = mmi_move_to(m);
+    MmiPiece pc = mmi_piece_on(&w->pos, from);
+    update_history(&w->history[w->pos.side].score[from][to], bonus);
+    update_history(&stack[-1]->score[pc][to], bonus);
+    update_history(&stack[-2]->score[pc][to], bonus);
+}
+
 static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int ply) {
     MmiPosition *pos = &w->pos;
     w->pv_length[ply] = ply;
@@ -110,7 +126,7 @@ static MmiValue qsearch(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int p
     int scores[MMI_MAX_MOVES];
     mmi_generate(pos, &list, in_check ? MMI_GEN_ALL : MMI_GEN_CAPTURES);
     if (in_check && list.count == 0) return -MMI_VALUE_MATE + ply;
-    mmi_order_score(pos, &list, scores, MMI_MOVE_NONE, NULL, NULL);
+    mmi_order_score(pos, &list, scores, MMI_MOVE_NONE, NULL, NULL, NULL);
 
     for (int i = 0; i < list.count; i++) {
         MmiMove m = mmi_order_pick(&list, scores, i);
@@ -168,6 +184,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
         if (alpha >= beta) return alpha;
     }
 
+    MmiPieceToHistory **stack = w->cont_stack + ply + 2;
     MmiKey key = mmi_position_key(pos);
     MmiTTData tt;
     bool tt_hit = mmi_tt_probe(key, &tt);
@@ -199,6 +216,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
      */
     if (prunable && depth >= 3 && eval >= beta && mmi_state(pos)->plies_from_null > 0 && has_non_pawn_material(pos)) {
         int r = 3 + depth / 3 + ((eval - beta) / 200 < 3 ? (eval - beta) / 200 : 3);
+        stack[0] = &w->continuation[MMI_NO_PIECE][0];
         mmi_position_make_null(pos);
         MmiValue v = -search(w, -beta, -beta + 1, depth - 1 - r, ply + 1);
         mmi_position_unmake_null(pos);
@@ -217,6 +235,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
         for (int i = 0; i < list.count; i++) {
             MmiMove m = list.moves[i];
             if (!mmi_is_capture(pos, m) || !mmi_see_ge(pos, m, probcut_beta - eval)) continue;
+            stack[0] = &w->continuation[mmi_piece_on(pos, mmi_move_from(m))][mmi_move_to(m)];
             mmi_position_make(pos, m);
             MmiValue v = -qsearch(w, -probcut_beta, -probcut_beta + 1, ply + 1);
             if (v >= probcut_beta) v = -search(w, -probcut_beta, -probcut_beta + 1, depth - 4, ply + 1);
@@ -230,7 +249,8 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
     }
 
     if (root) restrict_root(w, &list);
-    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side]);
+    const MmiPieceToHistory *continuation[2] = {stack[-1], stack[-2]};
+    mmi_order_score(pos, &list, scores, tt_move, w->killers[ply], &w->history[pos->side], continuation);
 
     MmiValue best = -MMI_VALUE_INFINITE;
     MmiMove best_move = MMI_MOVE_NONE;
@@ -264,7 +284,10 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
         if (prunable && depth <= 7 && best > -MMI_VALUE_MATE_IN_MAX_PLY &&
             !mmi_see_ge(pos, m, quiet ? -30 * depth * depth : -90 * depth))
             continue;
+        int from = mmi_move_from(m), to = mmi_move_to(m);
+        MmiPiece pc = mmi_piece_on(pos, from);
         MmiValue v;
+        stack[0] = &w->continuation[pc][to];
         mmi_position_make(pos, m);
         if (i == 0) {
             v = -search(w, -beta, -alpha, depth - 1, ply + 1);
@@ -278,7 +301,7 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
                 r = reductions[depth < 63 ? depth : 63][i < 63 ? i : 63];
                 if (pv_node) r--;
                 if (m == w->killers[ply][0] || m == w->killers[ply][1]) r--;
-                r -= w->history[!pos->side].score[mmi_move_from(m)][mmi_move_to(m)] / 8192;
+                r -= w->history[!pos->side].score[from][to] / 8192;
                 if (r < 0) r = 0;
                 if (r > depth - 2) r = depth - 2;
             }
@@ -307,10 +330,8 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
                         }
                         /* Reward the cutoff move and penalise the quiets searched before it, which failed. */
                         int bonus = depth * depth * 16 < 1600 ? depth * depth * 16 : 1600;
-                        int (*h)[64] = w->history[pos->side].score;
-                        update_history(&h[mmi_move_from(m)][mmi_move_to(m)], bonus);
-                        for (int j = 0; j < quiet_count; j++)
-                            update_history(&h[mmi_move_from(quiets_tried[j])][mmi_move_to(quiets_tried[j])], -bonus);
+                        update_quiet_histories(w, stack, m, bonus);
+                        for (int j = 0; j < quiet_count; j++) update_quiet_histories(w, stack, quiets_tried[j], -bonus);
                     }
                     break;
                 }
@@ -428,6 +449,13 @@ static void iterate(MmiSearchWorker *w) {
     }
 }
 
+static void clear_histories(MmiSearchWorker *w) {
+    memset(w->killers, 0, sizeof(w->killers));
+    memset(w->history, 0, sizeof(w->history));
+    memset(w->continuation, 0, sizeof(w->continuation));
+    w->cont_stack[0] = w->cont_stack[1] = &w->continuation[MMI_NO_PIECE][0];
+}
+
 static void thread_main(void *arg) { iterate(arg); }
 
 void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
@@ -436,8 +464,7 @@ void mmi_search_start(const MmiPosition *pos, const MmiLimits *limits) {
     memcpy(&worker.pos, pos, sizeof(*pos));
     worker.limits = *limits;
     worker.nodes = 0;
-    memset(worker.killers, 0, sizeof(worker.killers));
-    memset(worker.history, 0, sizeof(worker.history));
+    clear_histories(&worker);
     worker.silent = false;
     mmi_time_init(&worker.tm, limits, pos->side, move_overhead);
     mmi_tt_new_search();
@@ -463,8 +490,7 @@ uint64_t mmi_search_fixed_depth(const MmiPosition *pos, int depth) {
     mmi_limits_clear(&worker.limits);
     worker.limits.depth = depth;
     worker.nodes = 0;
-    memset(worker.killers, 0, sizeof(worker.killers));
-    memset(worker.history, 0, sizeof(worker.history));
+    clear_histories(&worker);
     worker.silent = true;
     mmi_time_init(&worker.tm, &worker.limits, pos->side, 0);
     mmi_tt_new_search();
