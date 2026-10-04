@@ -8,6 +8,7 @@
 #include "board/movegen.h"
 #include "eval/eval.h"
 #include "search/moveorder.h"
+#include "search/see.h"
 #include "search/tt.h"
 #include "util/misc.h"
 #include "util/thread.h"
@@ -229,6 +230,13 @@ static MmiValue search(MmiSearchWorker *w, MmiValue alpha, MmiValue beta, int de
             if (best < futility) best = futility;
             continue;
         }
+        /*
+         * SEE pruning: near the leaves, a move that loses material in the exchange on its square is unlikely to
+         * be worth searching. The allowed loss grows with depth, so deeper nodes still try sacrifices.
+         */
+        if (prunable && depth <= 7 && best > -MMI_VALUE_MATE_IN_MAX_PLY &&
+            !mmi_see_ge(pos, m, quiet ? -30 * depth * depth : -90 * depth))
+            continue;
         MmiValue v;
         mmi_position_make(pos, m);
         if (i == 0) {
