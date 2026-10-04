@@ -19,6 +19,11 @@ ifeq ($(ARCH),native)
     ARCH_FLAGS ?= -mcpu=native
   else
     ARCH_FLAGS ?= -march=native
+    # clang 18 warns that -march=native on AVX10.1 CPUs promotes avx10.1-256 to avx10.1-512, which -Werror
+    # fails. Older clang does not know that warning, hence the second flag.
+    ifneq ($(findstring clang,$(shell $(CC) --version 2>/dev/null)),)
+      ARCH_FLAGS += -Wno-unknown-warning-option -Wno-invalid-feature-combination
+    endif
   endif
 else
   ARCH_FLAGS ?= -march=$(ARCH)
